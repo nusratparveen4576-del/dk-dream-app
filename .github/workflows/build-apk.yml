@@ -1,0 +1,87 @@
+name: Build Android APK
+
+# Runs on every push to main/master, and manually from the Actions tab ("Run workflow").
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    name: Release APK
+    # Pinned image (not "latest") so the toolchain never changes underneath you.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CI: "1"
+      EXPO_NO_TELEMETRY: "1"
+      EXPO_NO_DOTENV: "1"
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx4g"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node 22 satisfies Expo SDK 58 / React Native 0.88 (^22.13).
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # JDK 17 is the version Gradle 9 + Android Gradle Plugin 9 expect.
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # Installs EXACTLY what package-lock.json says, so versions never drift or mismatch.
+      - name: Install dependencies
+        run: npm ci
+
+      # Generates the native android/ project from app.json (versions come from the installed SDK).
+      - name: Generate native Android project
+        run: npx expo prebuild --platform android --no-install --clean
+
+      # Lets Gradle download the exact SDK / build-tools / NDK this React Native version needs.
+      - name: Accept Android SDK licenses
+        run: yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('package-lock.json', 'app.json') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      # Release build, signed with the debug key so it installs on any phone.
+      - name: Build release APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon --stacktrace -PreactNativeArchitectures=arm64-v8a,armeabi-v7a,x86_64
+
+      - name: Collect APK
+        run: |
+          set -e
+          APK="$(find android/app/build/outputs/apk/release -name '*.apk' | head -n 1)"
+          if [ -z "$APK" ]; then echo "No APK produced"; exit 1; fi
+          mkdir -p out
+          cp "$APK" out/DK-Dream-Kitchen.apk
+          ls -lh out
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DK-Dream-Kitchen-apk
+          path: out/DK-Dream-Kitchen.apk
+          if-no-files-found: error
+          retention-days: 30
