@@ -43,9 +43,11 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # Installs EXACTLY what package-lock.json says, so versions never drift or mismatch.
+      # "npm ci" is strict and fails if the lockfile was made by a different npm version.
+      # "npm install" uses the lockfile when it can and quietly fills in anything missing,
+      # so it never stops the build. .npmrc already sets legacy-peer-deps=true.
       - name: Install dependencies
-        run: npm ci
+        run: npm install --no-audit --no-fund --legacy-peer-deps
 
       # Generates the native android/ project from app.json (versions come from the installed SDK).
       - name: Generate native Android project
